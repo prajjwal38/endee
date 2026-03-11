@@ -27,7 +27,13 @@ from dotenv import load_dotenv
 
 from embeddings import embed_query
 from endee_client import query_index
-from reranker import rerank
+
+# Reranker is optional – controlled by ENABLE_RERANKER env var
+ENABLE_RERANKER: bool = os.getenv("ENABLE_RERANKER", "false").lower() in ("true", "1", "yes")
+if ENABLE_RERANKER:
+    from reranker import rerank
+else:
+    rerank = None  # type: ignore[assignment]
 
 # Load environment variables
 load_dotenv()
@@ -75,9 +81,14 @@ def rag_answer(user_query: str, candidate_k: int = 20, top_k: int = 5) -> str:
             "Please try ingesting more papers first."
         )
 
-    # ── Step 3: Re-rank with Qwen3-Reranker-0.6B ──────────────────────────────
-    print(f"[RAGQueryAgent] Re-ranking {len(candidates)} candidate(s) with Qwen3-Reranker-0.6B …")
-    results = rerank(user_query, candidates, top_k=top_k)
+    # ── Step 3: Re-rank with Qwen3-Reranker-0.6B (optional) ───────────────────
+    if ENABLE_RERANKER and rerank is not None:
+        print(f"[RAGQueryAgent] Re-ranking {len(candidates)} candidate(s) with Qwen3-Reranker-0.6B …")
+        results = rerank(user_query, candidates, top_k=top_k)
+    else:
+        print(f"[RAGQueryAgent] Reranker disabled. Using top-{top_k} ANN results directly.")
+        # Sort by similarity score (descending) and take top_k
+        results = sorted(candidates, key=lambda x: x.get("score", 0.0), reverse=True)[:top_k]
 
     # ── Step 4: Build context block ────────────────────────────────────────────
     context_parts: List[str] = []
