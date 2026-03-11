@@ -1,385 +1,257 @@
-# Endee: High-Performance Open Source Vector Database
+# Agentic RAG Pipeline
 
-**Endee (nD)** is a specialized, high-performance vector database built for speed and efficiency. This guide covers supported platforms, dependency requirements, and detailed build instructions using both our automated installer and manual CMake configuration.
+> **ArXiv Research Papers → Endee Vector DB → Google Gemini → Grounded Answers**
 
-there are 3 ways to build and run endee:
-1. quick installation and run using install.sh and run.sh scripts
-2. manual build using cmake
-3. using docker
-
-also you can run endee using docker from docker hub without building it locally. refer to section 4 for more details.
+A fully agentic Retrieval-Augmented Generation system that answers research questions by fetching, ingesting, and querying ArXiv papers — all coordinated by [CrewAI](https://github.com/joaomdmoura/crewAI).
 
 ---
 
-## System Requirements
+## Problem Statement
 
-Before installing, ensure your system meets the following hardware and operating system requirements.
+Large language models hallucinate when asked about recent or niche research topics because their training data has a cutoff date. This pipeline solves that by:
 
-### Supported Operating Systems
-
-* **Linux**: Ubuntu(22.04, 24.04, 25.04) Debian(12, 13), Rocky(8, 9, 10), Centos(8, 9, 10), Fedora(40, 42, 43)
-* **macOS**: Apple Silicon (M Series) only.
-
-### Required Dependencies
-
-The following packages are required for compilation.
-
- `clang-19`, `cmake`, `build-essential`, `libssl-dev`, `libcurl4-openssl-dev`
-
-> **Note:** The build system requires **Clang 19** (or a compatible recent Clang version) supporting C++20.
+1. **Fetching live papers** from ArXiv at query time.
+2. **Storing them as vector embeddings** in the Endee vector database.
+3. **Grounding every answer** by retrieving the most relevant passages before calling Gemini.
 
 ---
 
-## 1. Quick Installation (Recommended)
+## System Architecture
 
-The easiest way to build **ndd** is using the included `install.sh` script. This script handles OS detection, dependency checks, and configuration automatically.
-
-### Usage
-
-First, ensure the script is executable:
-```bash
-chmod +x ./install.sh
 ```
-
-Run the script from the root of the repository. You **must** provide arguments for the build mode and/or CPU optimization.
-
-```bash
-./install.sh [BUILD_MODE] [CPU_OPTIMIZATION]
-```
-
-### Build Arguments
-
-You can combine one **Build Mode** and one **CPU Optimization** flag.
-
-#### Build Modes
-
-| Flag | Description | CMake Equivalent |
-| --- | --- | --- |
-| `--release` | **Default.** Optimized release build. |  |
-| `--debug_all` | Enables full debugging symbols. | `-DND_DEBUG=ON -DDEBUG=ON` |
-| `--debug_nd` | Enables NDD-specific logging/timing. | `-DND_DEBUG=ON` |
-
-#### CPU Optimization Options
-
-Select the flag matching your hardware to enable SIMD optimizations.
-
-| Flag | Description | Target Hardware |
-| --- | --- | --- |
-| `--avx2` | Enables AVX2 (FMA, F16C) | Modern x86_64 Intel/AMD |
-| `--avx512` | Enables AVX512 (F, BW, VNNI, FP16) | Server-grade x86_64 (Xeon/Epyc) |
-| `--neon` | Enables NEON (FP16, DotProd) | Apple Silicon / ARMv8.2+ |
-| `--sve2` | Enables SVE2 (INT8/16, FP16) | ARMv9 / SVE2 compatible |
-
-> **Note:** The `--avx512` build configuration enforces mandatory runtime checks for specific instruction sets. To successfully run this build, your CPU must support **`avx512` (Foundation), `avx512_fp16`, `avx512_vnni`, `avx512bw`, and `avx512_vpopcntdq`**; if any of these extensions are missing, the database will fail to initialize and exit immediately to avoid runtime crashes.
-
-
-### Example Commands
-
-**Build for Production (Intel/AMD with AVX2):**
-
-```bash
-./install.sh --release --avx2
-```
-
-**Example Build for Debugging (Apple Silicon):**
-
-```bash
-./install.sh --debug_all --neon
-```
-
-### Running the Server
-
-We provide a `run.sh` script to simplify running the server. It automatically detects the built binary and uses `ndd_data_dir=./data` by default.
-
-First, ensure the script is executable:
-
-```bash
-chmod +x ./run.sh
-```
-
-Then run the script:
-
-```bash
-./run.sh
-```
-
-This will automatically identify the latest binary and start the server.
-
-#### Options
-
-You can override the defaults using arguments:
-
-*   `ndd_data_dir=DIR`: Set the data directory.
-*   `binary_file=FILE`: Set the binary file to run.
-*   `ndd_auth_token=TOKEN`: Set the authentication token (leave empty/ignore to run without authentication).
-
-#### Examples
-
-**Run with custom data directory:**
-
-```bash
-./run.sh ndd_data_dir=./my_data
-```
-
-**Run specific binary:**
-
-```bash
-./run.sh binary_file=./build/ndd-avx2
-```
-
-**Run with authentication token:**
-
-```bash
-./run.sh ndd_auth_token=your_token
-```
-
-
-**Run with all options**
-
-```bash
-./run.sh ndd_data_dir=./my_data binary_file=./build/ndd-avx2 ndd_auth_token=your_token
-```
-
-**For Help**
-
-```bash
-./run.sh --help
-```
-
-
-## 2. Manual Build (Advanced)
-
-If you prefer to configure the build manually or integrate it into an existing install pipeline, you can use `cmake` directly.
-
-### Step 1: Prepare Build Directory
-
-```bash
-mkdir build && cd build
-```
-
-### Step 2: Configure
-
-Run `cmake` with the appropriate flags. You must manually define the compiler if it is not your system default.
-
-**Configuration Flags:**
-
-* **Debug Options:**
-* `-DDEBUG=ON` (Enable debug symbols/O0)
-* `-DND_DEBUG=ON` (Enable internal logging)
-
-
-* **SIMD Selectors (Choose One):**
-* `-DUSE_AVX2=ON`
-* `-DUSE_AVX512=ON`
-* `-DUSE_NEON=ON`
-* `-DUSE_SVE2=ON`
-
-
-**Example (x86_64 AVX512 Release):**
-
-```bash
-cmake -DCMAKE_BUILD_TYPE=Release \
-      -DUSE_AVX512=ON \
-      ..
-```
-
-### Step 3: Compile
-
-```bash
-make -j$(nproc)
-```
-
-### Running the Built Binary
-
-After a successful build, the binary will be generated in the `build/` directory.
-
-### Binary Naming
-
-The output binary name depends on the SIMD flag used during compilation:
-
-* `ndd-avx2`
-* `ndd-avx512`
-* `ndd-neon` (or `ndd-neon-darwin` for mac)
-* `ndd-sve2`
-
-A symlink called `ndd` links to the binary compiled for the current build.
-
-### Runtime Environment Variables
-
-Some environment variables **ndd** reads at runtime:
-
-* `NDD_DATA_DIR`: Defines the data directory
-* `NDD_AUTH_TOKEN`: Optional authentication token (see below)
-
-### Authentication
-
-**ndd** supports two authentication modes:
-
-**Open Mode (No Authentication)** - Default when `NDD_AUTH_TOKEN` is not set:
-```bash
-# All APIs work without authentication
-./build/ndd
-curl http://{{BASE_URL}}/api/v1/index/list
-```
-
-**Token Mode** - When `NDD_AUTH_TOKEN` is set:
-```bash
-# Generate a secure token
-export NDD_AUTH_TOKEN=$(openssl rand -hex 32)
-./build/ndd
-
-# All protected APIs require the token in Authorization header
-curl -H "Authorization: $NDD_AUTH_TOKEN" http://{{BASE_URL}}/api/v1/index/list
-```
-
-### Execution Example
-
-To run the database using the AVX2 binary and a local `data` folder:
-
-```bash
-# 1. Create the data directory
-mkdir -p ./data
-
-# 2. Export the environment variable and run
-export NDD_DATA_DIR=$(pwd)/data
-./build/ndd
-```
-
-Alternatively, as a single line:
-
-```bash
-NDD_DATA_DIR=./data ./build/ndd
+┌─────────────────────────────────────────────────────────────┐
+│                     USER RESEARCH QUERY                     │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│             Agent 1: Web Search Agent (CrewAI)              │
+│                                                             │
+│  ArXiv API ──► Fetch top-N papers                           │
+│  Output: [{ title, abstract, pdf_url, entry_url }]          │
+└────────────────────────────┬────────────────────────────────┘
+                             │  papers list
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│            Agent 2: Ingestion Agent (CrewAI)                │
+│                                                             │
+│  PDF Download (PyMuPDF)  → fallback to abstract             │
+│  Text Chunker            → ~500 tokens, 50-token overlap    │
+│  EmbeddingGemma-300m     → 768-dim dense vectors            │
+│  Endee SDK               → upsert to "arxiv_papers" index   │
+└────────────────────────────┬────────────────────────────────┘
+                             │  N chunks stored in Endee
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│           Agent 3: RAG Query Agent (CrewAI)                 │
+│                                                             │
+│  EmbeddingGemma-300m  → embed user query (768-dim)          │
+│  Endee Query          → top-20 ANN candidates (cosine)      │
+│  Qwen3-Reranker-0.6B  → re-score & re-rank to top-5        │
+│  Context Assembly     → ranked chunks + metadata            │
+│  Gemini 1.5 Flash     → grounded, cited answer              │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+                   ┌──────────────────┐
+                   │  CITED ANSWER    │
+                   │  [Source 1] ...  │
+                   │  [Source 2] ...  │
+                   │  References: ... │
+                   └──────────────────┘
 ```
 
 ---
 
+## Stack
 
-
-## 3. Docker Deployment
-
-We provide a Dockerfile for easy containerization. This ensures a consistent runtime environment and simplifies the deployment process across various platforms.
-
-### Build the Image
-
-You **must** specify the target architecture (`avx2`, `avx512`, `neon`, `sve2`) using the `BUILD_ARCH` build argument. You can optionally enable a debug build using the `DEBUG` argument.
-
-```bash
-# Production Build (AVX2) (for x86_64 systems)
-docker build --ulimit nofile=100000:100000 --build-arg BUILD_ARCH=avx2 -t endee-oss:latest -f ./infra/Dockerfile .
-
-# Debug Build (Neon) (for arm64, mac apple silicon)
-docker build --ulimit nofile=100000:100000 --build-arg BUILD_ARCH=neon --build-arg DEBUG=true -t endee-oss:latest -f ./infra/Dockerfile .
-```
-
-### Run the Container
-
-The container exposes port `8080` and stores data in `/data` inside container. You should persist this data using a docker volume.
-
-```bash
-docker run \
-  -p 8080:8080 \
-  -v endee-data:/data \
-  -e NDD_AUTH_TOKEN="your_secure_token" \
-  --name endee-server \
-  endee-oss:latest
-```
-
-leave `NDD_AUTH_TOKEN` empty or remove it to run endee without authentication.
-
-### Alternatively: Docker Compose
-
-You can also use `docker-compose` to run the service.
-
-1. Start the container:
-   ```bash
-   docker-compose up
-   ```
+| Component        | Technology                                        |
+|-----------------|---------------------------------------------------|
+| Agent Framework  | [CrewAI](https://github.com/joaomdmoura/crewAI)  |
+| Vector Database  | [Endee](https://endee.io) (Docker, localhost:8080) |
+| Embeddings       | `google/embeddinggemma-300m` via sentence-transformers (768-dim) |
+| Re-ranker        | `Qwen/Qwen3-Reranker-0.6B` via transformers (cross-encoder, yes/no scoring) |
+| LLM              | Google Gemini 1.5 Flash / Pro                    |
+| Paper Source     | ArXiv API (`arxiv` Python package)               |
+| PDF Parsing      | PyMuPDF (`fitz`)                                 |
 
 ---
 
-## 4. Running Docker container from registry
+## How Endee Is Used
 
-You can run Endee directly using the pre-built image from Docker Hub without building locally.
+Endee is an open-source, high-performance vector database that runs locally via Docker.
 
-### Using Docker Compose
+In this project:
+- **Index**: `arxiv_papers` — created at startup (cosine similarity, 768 dims).
+- **Upsert**: Each paper is chunked into ~500-token segments. Every chunk is embedded with EmbeddingGemma and upserted with metadata (`title`, `chunk_index`, `source_url`, `text`).
+- **Query**: The user's question is embedded (using the EmbeddingGemma query prompt format) and sent to Endee's `/query` endpoint. The top-5 most similar chunks are returned with their metadata and similarity scores.
 
-Create a new directory for Endee:
+```python
+# Connecting to Endee
+from endee import Client
+client = Client(url="http://localhost:8080")
 
-```bash
-mkdir endee && cd endee
+# Creating the index
+client.create_index(name="arxiv_papers", dimension=768, space_type="cosine")
+
+# Upserting a vector
+client.upsert(index_name="arxiv_papers", vectors=[{
+    "id": "2301.07041_chunk_0",
+    "vector": [...],   # 768-dim float32 list
+    "metadata": { "title": "...", "chunk_index": 0, "source_url": "..." }
+}])
+
+# Querying
+results = client.query(index_name="arxiv_papers", vector=[...], top_k=5)
 ```
 
-Inside this directory, create a file named `docker-compose.yml` and copy the following content into it:
+---
 
-```yaml
-services:
-  endee:
-    image: endeeio/endee-server:latest
-    container_name: endee-server
-    ports:
-      - "8080:8080"
-    environment:
-      NDD_NUM_THREADS: 0
-      NDD_AUTH_TOKEN: ""  # Optional: set for authentication
-    volumes:
-      - endee-data:/data
-    restart: unless-stopped
+## Project Structure
 
-volumes:
-  endee-data:
+```
+endee/
+├── agents/
+│   ├── __init__.py            # Package re-exports
+│   ├── web_search_agent.py    # Agent 1: ArXiv fetcher
+│   ├── ingestion_agent.py     # Agent 2: PDF → Endee
+│   └── rag_query_agent.py     # Agent 3: Endee → Gemini
+├── crew.py                    # CrewAI sequential coordinator
+├── embeddings.py              # EmbeddingGemma-300m helper
+├── endee_client.py            # Endee SDK wrapper
+├── main.py                    # CLI entry point
+├── requirements.txt
+├── docker-compose.yml         # Endee Docker config (pre-existing)
+└── .env                       # Secrets (not committed)
 ```
 
-Then run:
+---
+
+## Setup
+
+### 1. Prerequisites
+
+- Python 3.10+
+- Docker Desktop running
+- A [Google AI Studio](https://aistudio.google.com/) API key
+
+### 2. Start Endee via Docker
+
 ```bash
 docker compose up -d
 ```
 
-for more details visit [docs.endee.io](https://docs.endee.io/quick-start)
+Verify it's running:
+```bash
+curl http://localhost:8080/health
+```
+
+### 3. Install Python Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+> **Note**: `google/embeddinggemma-300m` requires `sentence-transformers>=2.2.2` and will be downloaded (~600 MB) from HuggingFace on the first run. You may need to accept the model license on HuggingFace.
+
+### 4. Configure Environment Variables
+
+Edit `.env`:
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+ENDEE_URL=http://localhost:8080
+ENDEE_AUTH_TOKEN=          # leave blank if you didn't set NDD_AUTH_TOKEN
+```
+
+### 5. Run the Pipeline
+
+**Interactive mode:**
+```bash
+python main.py
+```
+
+**With CLI arguments:**
+```bash
+python main.py --query "What are the latest advances in diffusion models for image generation?" --papers 5
+```
 
 ---
 
-## Contribution
+## Example Query & Output
 
-We welcome contributions from the community to help make vector search faster and more accessible for everyone. To contribute:
+**Query:**
+```
+What are the latest advances in diffusion models for image generation?
+```
 
-* **Submit Pull Requests**: Have a fix or a new feature? Fork the repo, create a branch, and send a PR.
-* **Report Issues**: Found a bug or a performance bottleneck? Open an issue on GitHub with steps to reproduce it.
-* **Suggest Improvements**: We are always looking to optimize performance; feel free to suggest new CPU target optimizations or architectural enhancements.
-* **Feature Requests**: If there is a specific functionality you need, start a discussion in the issues section.
+**Pipeline execution:**
+```
+═══════════════════════════════════════════════════════════════════════
+  Agentic RAG Pipeline  –  Starting
+═══════════════════════════════════════════════════════════════════════
+  Query : What are the latest advances in diffusion models for image generation?
+  Papers: up to 5 from ArXiv
+
+▶ Phase 1/3 — Web Search Agent
+[WebSearchAgent] Searching ArXiv: 'diffusion models image generation' …
+  ✓ Found: Denoising Diffusion Probabilistic Models …
+  ✓ Found: Stable Diffusion: High-Resolution Image Synthesis …
+  ✓ Found: DALL-E 3: Improving Image Generation with …
+  ✓ Found: DiT: Scalable Diffusion Models with Transformers …
+  ✓ Found: Consistency Models …
+[WebSearchAgent] Retrieved 5 paper(s).
+
+▶ Phase 2/3 — Ingestion Agent
+[IngestionAgent] Processing: Denoising Diffusion Probabilistic Models …
+  [Ingestion] PDF extracted: 82,341 characters.
+  [Ingestion] 47 chunk(s) generated.
+[EndeeClient]  Upserting 47 vectors …
+... (repeated for each paper)
+  ✓ 198 chunk(s) stored in Endee.
+
+▶ Phase 3/3 — RAG Query Agent
+[Embeddings]  Loading model 'google/embeddinggemma-300m' …
+[EndeeClient] Querying 'arxiv_papers' for top-5 matches …
+[RAGQueryAgent] Sending context + query to Gemini (gemini-1.5-flash) …
+```
+
+**Final Answer (excerpt):**
+```
+Recent advances in diffusion models for image generation have focused on
+three key areas:
+
+**1. Architecture Improvements**
+Diffusion Transformers (DiT) [Source 4] replace the traditional U-Net
+backbone with a Transformer architecture, showing superior scaling properties
+and state-of-the-art FID scores on ImageNet…
+
+**2. Efficiency and Consistency**
+Consistency Models [Source 5] enable single-step generation by training
+models to map any point on a diffusion trajectory directly to its origin,
+achieving 10-80x faster inference compared to DDPM…
+
+**References**
+- [Source 1] Denoising Diffusion Probabilistic Models — https://arxiv.org/abs/2006.11239
+- [Source 4] DiT: Scalable Diffusion Models with Transformers — https://arxiv.org/abs/2212.09748
+- [Source 5] Consistency Models — https://arxiv.org/abs/2303.01469
+```
+
+---
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| `Connection refused localhost:8080` | Run `docker compose up -d` |
+| `GEMINI_API_KEY not set` | Add key to `.env` file |
+| `HuggingFace 401 error` | Accept the EmbeddingGemma license at huggingface.co/google/embeddinggemma-300m |
+| `float16` error with EmbeddingGemma | Already handled — we force `float32` in `embeddings.py` |
+| PDF download fails | Ingestion agent automatically falls back to the paper abstract |
+| `transformers` version error with reranker | Run `pip install "transformers>=4.51.0"` — Qwen3-Reranker requires this minimum version |
 
 ---
 
 ## License
 
-Endee is open source software licensed under the
-**Apache License 2.0**.
-
-You are free to use, modify, and distribute this software for
-personal, commercial, and production use.
-
-See the LICENSE file for full license terms.
-
----
-
-## Trademark and Branding
-
-“Endee” and the Endee logo are trademarks of Endee Labs.
-
-The Apache License 2.0 does **not** grant permission to use the Endee name,
-logos, or branding in a way that suggests endorsement or affiliation.
-
-If you offer a hosted or managed service based on this software, you must:
-- Use your own branding
-- Avoid implying it is an official Endee service
-
-For trademark or branding permissions, contact: enterprise@endee.io
-
----
-
-## Third-Party Software
-
-This project includes or depends on third-party software components that are
-licensed under their respective open source licenses.
-
-Use of those components is governed by the terms and conditions of their
-individual licenses, not by the Apache License 2.0 for this project.
+This project is provided for educational and demonstration purposes.
+The EmbeddingGemma model is subject to [Google's model license](https://huggingface.co/google/embeddinggemma-300m).
