@@ -59,13 +59,24 @@ def fetch_arxiv_papers(query: str, max_results: int = 5) -> List[Dict[str, Any]]
     client = arxiv.Client()
 
     for result in client.results(search):
+        arxiv_id = result.entry_id.split("/abs/")[-1]
         paper = {
-            "title": result.title,
-            "authors": [str(a) for a in result.authors],
-            "abstract": result.summary.strip(),
-            "pdf_url": result.pdf_url,
-            "entry_url": result.entry_id,
-            "arxiv_id": result.entry_id.split("/abs/")[-1],
+            "title":            result.title,
+            "authors":          [str(a) for a in result.authors],
+            "abstract":         result.summary.strip(),
+            "pdf_url":          result.pdf_url,
+            "entry_url":        result.entry_id,
+            "arxiv_id":         arxiv_id,
+            # ── Enriched metadata ──────────────────────────────────────
+            # Direct link to the LaTeX tarball source on ArXiv
+            "source_tarball_url": f"https://arxiv.org/e-print/{arxiv_id}",
+            # Publication and update dates (ISO 8601)
+            "published":        result.published.strftime("%Y-%m-%d") if result.published else "",
+            "updated":          result.updated.strftime("%Y-%m-%d")   if result.updated   else "",
+            # ArXiv primary category (e.g. "gr-qc", "hep-th", "quant-ph")
+            "primary_category": result.primary_category if hasattr(result, "primary_category") else "",
+            # All categories the paper is listed under
+            "categories":       result.categories if hasattr(result, "categories") else [],
         }
         papers.append(paper)
         print(f"  ✓ Found: {result.title[:80]} …")

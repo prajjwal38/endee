@@ -21,6 +21,7 @@ import os
 import textwrap
 from typing import Any, Dict, List
 
+import numpy as np
 import google.generativeai as genai
 from crewai import Agent, Task
 from dotenv import load_dotenv
@@ -51,6 +52,35 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 
+# ── Pre-retrieval Query Expansion ─────────────────────────────────────────────
+
+def _expand_query(user_query: str) -> List[str]:
+    """
+    Use Gemini to generate 4 academically-phrased variants of the user query.
+    This broadens the retrieval surface area before hitting Endee.
+
+    Returns the original query + up to 4 expansions (list of strings).
+    Falls back gracefully to the original query alone on any error.
+    """
+    prompt = (
+        f'Given this research question: "{user_query}"\n\n'
+        "Generate 4 alternative phrasings that a physicist or academic might use "
+        "when writing or searching for this topic in a research paper. "
+        "Each phrasing should use precise scientific terminology. "
+        "Output ONLY the 4 questions, one per line, no numbering, no extra text."
+    )
+    try:
+        model = genai.GenerativeModel(model_name=GEMINI_MODEL)
+        response = model.generate_content(prompt)
+        lines = [l.strip() for l in response.text.strip().splitlines() if l.strip()]
+        expansions = lines[:4]
+        print(f"[RAGQueryAgent] Query expanded into {len(expansions)+1} variants.")
+        return [user_query] + expansions
+    except Exception as exc:
+        print(f"[RAGQueryAgent] Query expansion skipped ({exc}). Using original query.")
+        return [user_query]
+
+
 # ── Core RAG logic ─────────────────────────────────────────────────────────────
 
 def rag_answer(user_query: str, candidate_k: int = 20, top_k: int = 5) -> str:
@@ -67,9 +97,14 @@ def rag_answer(user_query: str, candidate_k: int = 20, top_k: int = 5) -> str:
     -------
     str – Grounded, cited answer from Gemini.
     """
-    # ── Step 1: Embed the query ────────────────────────────────────────────────
-    print(f"\n[RAGQueryAgent] Embedding query …")
-    query_vector = embed_query(user_query)
+    # ── Step 1: Pre-retrieval Query Expansion + Embedding ──────────────────
+    print(f"\n[RAGQueryAgent] Expanding query with Gemini …")
+    query_variants = _expand_query(user_query)
+
+    print(f"[RAGQueryAgent] Embedding {len(query_variants)} query variant(s) …")
+    variant_vectors = [embed_query(q) for q in query_variants]
+    # Average all variant vectors into one enriched query vector
+    query_vector = list(np.mean(variant_vectors, axis=0))
 
     # ── Step 2: Retrieve candidates from Endee (ANN, larger pool) ─────────────
     print(f"[RAGQueryAgent] Retrieving top-{candidate_k} ANN candidates from Endee …")
