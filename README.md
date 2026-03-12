@@ -28,28 +28,29 @@ Large language models hallucinate when asked about recent or niche research topi
 │             Agent 1: Web Search Agent (CrewAI)              │
 │                                                             │
 │  ArXiv API ──► Fetch top-N papers                           │
-│  Output: [{ title, abstract, pdf_url, entry_url }]          │
+│  Output: [{ title, abstract, source_tarball_url, etc. }]    │
 └────────────────────────────┬────────────────────────────────┘
                              │  papers list
                              ▼
 ┌─────────────────────────────────────────────────────────────┐
 │            Agent 2: Ingestion Agent (CrewAI)                │
 │                                                             │
-│  PDF Download (PyMuPDF)  → fallback to abstract             │
-│  Text Chunker            → ~500 tokens, 50-token overlap    │
-│  EmbeddingGemma-300m     → 768-dim dense vectors            │
-│  Endee SDK               → upsert to "arxiv_papers" index   │
+│  LaTeX Download (tarball) → fallback to PDF/abstract        │
+│  Ollama Semantic Chunker  → gpt-oss:120b semantic boundaries│
+│  EmbeddingGemma-300m      → 768-dim dense vectors           │
+│  Endee SDK                → upsert with enriched metadata   │
 └────────────────────────────┬────────────────────────────────┘
                              │  N chunks stored in Endee
                              ▼
 ┌─────────────────────────────────────────────────────────────┐
 │           Agent 3: RAG Query Agent (CrewAI)                 │
 │                                                             │
-│  EmbeddingGemma-300m  → embed user query (768-dim)          │
+│  Gemini 2.5 Flash     → pre-retrieval query expansion       │
+│  EmbeddingGemma-300m  → embed 5 variants & average vector   │
 │  Endee Query          → top-20 ANN candidates (cosine)      │
-│  Qwen3-Reranker-0.6B  → re-score & re-rank to top-5        │
+│  Qwen3-Reranker-0.6B  → re-score & re-rank to top-5 (opt)  │
 │  Context Assembly     → ranked chunks + metadata            │
-│  Gemini 1.5 Flash     → grounded, cited answer              │
+│  Gemini 2.5 Flash     → grounded, cited answer              │
 └────────────────────────────┬────────────────────────────────┘
                              │
                              ▼
@@ -70,10 +71,11 @@ Large language models hallucinate when asked about recent or niche research topi
 | Agent Framework  | [CrewAI](https://github.com/joaomdmoura/crewAI)  |
 | Vector Database  | [Endee](https://endee.io) (Docker, localhost:8080) |
 | Embeddings       | `google/embeddinggemma-300m` via sentence-transformers (768-dim) |
-| Re-ranker        | `Qwen/Qwen3-Reranker-0.6B` via transformers (cross-encoder, yes/no scoring) |
-| LLM              | Google Gemini 1.5 Flash / Pro                    |
+| Semantic Chunker | Ollama locally (`gpt-oss:120b` turbo mode)       |
+| Document Parser  | LaTeX source extraction (tarballs) + PyMuPDF fallback |
+| Re-ranker        | `Qwen/Qwen3-Reranker-0.6B` via transformers (optional) |
+| LLM              | Google Gemini 2.5 Flash                          |
 | Paper Source     | ArXiv API (`arxiv` Python package)               |
-| PDF Parsing      | PyMuPDF (`fitz`)                                 |
 
 ---
 
@@ -83,8 +85,8 @@ Endee is an open-source, high-performance vector database that runs locally via 
 
 In this project:
 - **Index**: `arxiv_papers` — created at startup (cosine similarity, 768 dims).
-- **Upsert**: Each paper is chunked into ~500-token segments. Every chunk is embedded with EmbeddingGemma and upserted with metadata (`title`, `chunk_index`, `source_url`, `text`).
-- **Query**: The user's question is embedded (using the EmbeddingGemma query prompt format) and sent to Endee's `/query` endpoint. The top-5 most similar chunks are returned with their metadata and similarity scores.
+- **Upsert**: Each paper is semantically chunked by Ollama. Every chunk is embedded with EmbeddingGemma and upserted with enriched metadata (`title`, `authors`, `sub_heading`, `primary_category`, `source_type`, `text`, etc.).
+- **Query**: The user's question is expanded into multiple variants, averaged into a single query vector, and sent to Endee's `/query` endpoint. The top-20 candidates are pulled and then either reranked or fed directly to Gemini.
 
 ```python
 # Connecting to Endee
@@ -98,7 +100,14 @@ client.create_index(name="arxiv_papers", dimension=768, space_type="cosine")
 client.upsert(index_name="arxiv_papers", vectors=[{
     "id": "2301.07041_chunk_0",
     "vector": [...],   # 768-dim float32 list
-    "metadata": { "title": "...", "chunk_index": 0, "source_url": "..." }
+    "meta": { 
+        "title": "...", 
+        "chunk_index": 0, 
+        "sub_heading": "Introduction",
+        "primary_category": "gr-qc",
+        "source_type": "latex",
+        "text": "..." 
+    }
 }])
 
 # Querying
@@ -161,6 +170,10 @@ Edit `.env`:
 GEMINI_API_KEY=your_gemini_api_key_here
 ENDEE_URL=http://localhost:8080
 ENDEE_AUTH_TOKEN=          # leave blank if you didn't set NDD_AUTH_TOKEN
+
+ENABLE_RERANKER=false      # optionally enable Qwen reranking
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=gpt-oss:120b
 ```
 
 ### 5. Run the Pipeline
